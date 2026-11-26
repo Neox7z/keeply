@@ -12,7 +12,10 @@ export default function LandingPage() {
             </div>
             <span className="font-bold text-xl">Keeply</span>
           </div>
-          <Link href="/dashboard" className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">
+          <Link
+            href="/dashboard"
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700"
+          >
             Empezar gratis
           </Link>
         </div>
@@ -22,25 +25,46 @@ export default function LandingPage() {
           <Zap className="w-4 h-4" /> El Shazam de tus cosas
         </div>
         <h1 className="text-4xl md:text-5xl font-bold tracking-tight max-w-2xl mx-auto mb-6">
-          Tus cosas, <span className="text-blue-600">cuidadas automáticamente</span>
+          Tus cosas,{" "}
+          <span className="text-blue-600">cuidadas automáticamente</span>
         </h1>
         <p className="text-lg text-slate-600 max-w-xl mx-auto mb-10">
-          Registra cualquier aparato con una foto. Keeply lee la etiqueta, genera el calendario de mantenimiento y responde preguntas del manual exacto.
+          Registra cualquier aparato con una foto. Keeply lee la etiqueta,
+          genera el calendario de mantenimiento y responde preguntas del manual
+          exacto.
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
-          <Link href="/scan" className="inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl text-lg font-semibold hover:bg-blue-700 shadow-lg shadow-blue-600/20">
+          <Link
+            href="/scan"
+            className="inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl text-lg font-semibold hover:bg-blue-700 shadow-lg shadow-blue-600/20"
+          >
             <Camera className="w-5 h-5" /> Escanear mi primer objeto
           </Link>
-          <Link href="/dashboard" className="inline-flex items-center justify-center gap-2 border px-8 py-4 rounded-xl text-lg font-semibold hover:bg-slate-50">
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center justify-center gap-2 border px-8 py-4 rounded-xl text-lg font-semibold hover:bg-slate-50"
+          >
             Ver demo
           </Link>
         </div>
       </section>
       <section className="container mx-auto px-4 py-16 grid md:grid-cols-3 gap-8">
         {[
-          { icon: Camera, title: "1. Foto de la etiqueta", desc: "Apunta a la etiqueta. Keeply lee marca, modelo y número de serie." },
-          { icon: Calendar, title: "2. Calendario inteligente", desc: "Alertas cuando toca limpiar filtros o cambiar piezas de desgaste." },
-          { icon: MessageSquare, title: "3. Pregúntale al objeto", desc: "Error E4, ¿qué hago? Responde con el manual de tu modelo." },
+          {
+            icon: Camera,
+            title: "1. Foto de la etiqueta",
+            desc: "Apunta a la etiqueta. Keeply lee marca, modelo y número de serie.",
+          },
+          {
+            icon: Calendar,
+            title: "2. Calendario inteligente",
+            desc: "Alertas cuando toca limpiar filtros o cambiar piezas de desgaste.",
+          },
+          {
+            icon: MessageSquare,
+            title: "3. Pregúntale al objeto",
+            desc: "Error E4, ¿qué hago? Responde con el manual de tu modelo.",
+          },
         ].map((f) => (
           <div key={f.title} className="bg-white border rounded-2xl p-6">
             <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mb-4">
