@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Package, MessageSquare, Wrench, Info } from "lucide-react";
 
+type Msg = { role: "user" | "assistant"; content: string };
+
 const ITEM = {
   name: "Aire Acondicionado Sala",
   brand: "Daikin",
@@ -37,10 +39,11 @@ type Tab = "overview" | "maintenance" | "chat";
 export default function ItemPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState([
+  const [messages, setMessages] = useState<Msg[]>([
     {
-      role: "assistant" as const,
-      content: "Hola. Soy el asistente de tu Aire Acondicionado Daikin FTXC35C. ¿En qué te ayudo?",
+      role: "assistant",
+      content:
+        "Hola. Soy el asistente de tu Aire Acondicionado Daikin FTXC35C. ¿En qué te ayudo?",
     },
   ]);
 
@@ -75,16 +78,20 @@ export default function ItemPage() {
       </div>
 
       <div className="bg-white border-b flex">
-        {[
-          { id: "overview" as const, label: "Resumen", icon: Info },
-          { id: "maintenance" as const, label: "Cuidado", icon: Wrench },
-          { id: "chat" as const, label: "Preguntar", icon: MessageSquare },
-        ].map((t) => (
+        {(
+          [
+            { id: "overview" as const, label: "Resumen", icon: Info },
+            { id: "maintenance" as const, label: "Cuidado", icon: Wrench },
+            { id: "chat" as const, label: "Preguntar", icon: MessageSquare },
+          ]
+        ).map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={`flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-medium border-b-2 ${
-              tab === t.id ? "border-blue-600 text-blue-600" : "border-transparent text-slate-400"
+              tab === t.id
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-slate-400"
             }`}
           >
             <t.icon className="w-4 h-4" />
@@ -106,7 +113,9 @@ export default function ItemPage() {
             </div>
             <div>
               <p className="text-xs text-slate-400">Marca / Modelo</p>
-              <p className="font-semibold">{ITEM.brand} {ITEM.model}</p>
+              <p className="font-semibold">
+                {ITEM.brand} {ITEM.model}
+              </p>
             </div>
           </div>
           <h2 className="font-semibold">Consumibles / Repuestos</h2>
