@@ -78,15 +78,23 @@ Responde SOLO con un JSON válido, sin markdown ni texto extra:
 }
 Si no puedes leer algo, usa null. Sé preciso con marca y modelo.`;
 
-  const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+  const models = [
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+  ];
   let lastErr = "";
 
   for (const model of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
         body: JSON.stringify({
           contents: [
             {
@@ -105,17 +113,27 @@ Si no puedes leer algo, usa null. Sé preciso con marca y modelo.`;
 
       const textBody = await res.text();
       if (!res.ok) {
-        lastErr = `${model}: HTTP ${res.status} ${textBody.slice(0, 250)}`;
+        lastErr = `${model}: HTTP ${res.status} ${textBody.slice(0, 280)}`;
         console.error(lastErr);
         continue;
       }
 
       const json = JSON.parse(textBody);
       const content =
-        json.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") ||
-        "";
+        json.candidates?.[0]?.content?.parts
+          ?.map((p: any) => p.text || "")
+          .join("") || "";
+      if (!content) {
+        lastErr = `${model}: respuesta vacía`;
+        continue;
+      }
       const parsed = parseModelJson(content);
-      return { ...parsed, source: "vision", modelUsed: model, provider: "gemini" };
+      return {
+        ...parsed,
+        source: "vision",
+        modelUsed: model,
+        provider: "gemini",
+      };
     } catch (e: any) {
       lastErr = `${model}: ${e.message}`;
       continue;
