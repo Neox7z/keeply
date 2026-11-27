@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const maxDuration = 30;
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -13,19 +15,12 @@ export async function POST(req: NextRequest) {
     }
 
     const geminiKey = process.env.GEMINI_API_KEY;
-    const xaiKey = process.env.XAI_API_KEY;
-    const openaiKey = process.env.OPENAI_API_KEY;
-
-    if (!geminiKey && !xaiKey && !openaiKey) {
+    if (!geminiKey) {
       return NextResponse.json(demoResult());
     }
 
     try {
-      if (geminiKey) {
-        const result = await identifyWithGemini(image, geminiKey);
-        return NextResponse.json(result);
-      }
-      const result = await identifyWithVision(image, xaiKey, openaiKey);
+      const result = await identifyWithGemini(image, geminiKey);
       return NextResponse.json(result);
     } catch (apiErr: any) {
       console.error("[identify] API error:", apiErr?.message || apiErr);
@@ -34,7 +29,7 @@ export async function POST(req: NextRequest) {
           error: "Error al procesar la imagen",
           detail: String(apiErr?.message || apiErr).slice(0, 500),
           hint:
-            "Revisa GEMINI_API_KEY en Vercel (aistudio.google.com/apikey), cuota gratis activa y Redeploy tras guardar.",
+            "Revisa GEMINI_API_KEY en Vercel (aistudio.google.com/apikey) y Redeploy.",
         },
         { status: 502 }
       );
@@ -57,64 +52,49 @@ function extractBase64(image: string): { mime: string; data: string } {
 async function identifyWithGemini(image: string, apiKey: string) {
   const { mime, data } = extractBase64(image);
 
-  const prompt = `Eres un experto en identificar electrodomésticos y equipos a partir de la etiqueta del fabricante.
-Analiza la imagen de la etiqueta y extrae TODOS los datos visibles.
-Responde SOLO con un JSON válido, sin markdown ni texto extra:
-{
-  "success": true,
-  "brand": "marca o null",
-  "model": "modelo o null",
-  "serialNumber": "número de serie o null",
-  "category": "hvac|appliance|electronics|tool|other",
-  "confidence": 0.0 a 1.0,
-  "suggestedName": "nombre corto para el inventario",
-  "rawText": "texto completo leído de la etiqueta",
-  "suggestedMaintenance": [
-    { "title": "...", "frequencyDays": 90, "estimatedMinutes": 10, "isCritical": true }
-  ],
-  "suggestedConsumables": [
-    { "name": "...", "estimatedLifespanDays": 90, "notes": "..." }
-  ]
-}
-Si no puedes leer algo, usa null. Sé preciso con marca y modelo.`;
+  if (data.length > 4_000_000) {
+    throw new Error("Imagen demasiado grande. Usa una foto más cercana/ligera.");
+  }
 
-  const models = [
-    "gemini-3.8-flash",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-  ];
+  const prompt = `Eres un experto en identificar electrodomésticos a partir de la etiqueta.
+Responde SOLO con JSON válido (sin markdown):
+{"success":true,"brand":"marca o null","model":"modelo o null","serialNumber":"serie o null","category":"hvac|appliance|electronics|tool|other","confidence":0.0,"suggestedName":"nombre corto","rawText":"texto leído","suggestedMaintenance":[{"title":"...","frequencyDays":90,"estimatedMinutes":10,"isCritical":true}],"suggestedConsumables":[{"name":"...","estimatedLifespanDays":90,"notes":"..."}]}
+Si no lees algo usa null.`;
+
+  const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.8-flash"];
   let lastErr = "";
 
   for (const model of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 18000);
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: prompt },
-                { inline_data: { mime_type: mime, data } },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 1500,
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-goog-api-key": apiKey,
           },
-        }),
-      });
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inline_data: { mime_type: mime, data } },
+                ],
+              },
+            ],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 1024 },
+          }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timer);
 
       const textBody = await res.text();
       if (!res.ok) {
-        lastErr = `${model}: HTTP ${res.status} ${textBody.slice(0, 280)}`;
-        console.error(lastErr);
+        lastErr = `${model}: HTTP ${res.status} ${textBody.slice(0, 250)}`;
         continue;
       }
 
@@ -127,86 +107,23 @@ Si no puedes leer algo, usa null. Sé preciso con marca y modelo.`;
         lastErr = `${model}: respuesta vacía`;
         continue;
       }
-      const parsed = parseModelJson(content);
       return {
-        ...parsed,
+        ...parseModelJson(content),
         source: "vision",
         modelUsed: model,
         provider: "gemini",
       };
     } catch (e: any) {
-      lastErr = `${model}: ${e.message}`;
+      clearTimeout(timer);
+      lastErr =
+        e?.name === "AbortError"
+          ? `${model}: timeout (18s)`
+          : `${model}: ${e.message}`;
       continue;
     }
   }
 
   throw new Error(lastErr || "Gemini no respondió");
-}
-
-async function identifyWithVision(
-  image: string,
-  xaiKey?: string,
-  openaiKey?: string
-) {
-  const systemPrompt = `Eres un experto en identificar electrodomésticos. Responde SOLO JSON válido con brand, model, serialNumber, category, confidence, suggestedName, rawText, suggestedMaintenance, suggestedConsumables.`;
-
-  const imageUrl = image.startsWith("data:")
-    ? image
-    : `data:image/jpeg;base64,${image}`;
-  const userContent = [
-    { type: "text", text: "Identifica este aparato por la etiqueta." },
-    { type: "image_url", image_url: { url: imageUrl } },
-  ];
-
-  if (xaiKey) {
-    const res = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${xaiKey}`,
-      },
-      body: JSON.stringify({
-        model: "grok-4.7",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.1,
-        max_tokens: 1500,
-      }),
-    });
-    if (!res.ok) throw new Error(`xAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    const data = await res.json();
-    return {
-      ...parseModelJson(data.choices?.[0]?.message?.content || ""),
-      source: "vision",
-      provider: "xai",
-    };
-  }
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.1,
-      max_tokens: 1500,
-    }),
-  });
-  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  const data = await res.json();
-  return {
-    ...parseModelJson(data.choices?.[0]?.message?.content || ""),
-    source: "vision",
-    provider: "openai",
-  };
 }
 
 function parseModelJson(text: string) {
@@ -230,7 +147,14 @@ function parseModelJson(text: string) {
       rawText: parsed.rawText || "",
       suggestedMaintenance: Array.isArray(parsed.suggestedMaintenance)
         ? parsed.suggestedMaintenance
-        : defaultMaintenance(parsed.category),
+        : [
+            {
+              title: "Revisión general",
+              frequencyDays: 180,
+              estimatedMinutes: 15,
+              isCritical: false,
+            },
+          ],
       suggestedConsumables: Array.isArray(parsed.suggestedConsumables)
         ? parsed.suggestedConsumables
         : [],
@@ -245,41 +169,10 @@ function parseModelJson(text: string) {
       confidence: 0.3,
       suggestedName: "Objeto (revisar manualmente)",
       rawText: text.slice(0, 500),
-      suggestedMaintenance: defaultMaintenance("other"),
+      suggestedMaintenance: [],
       suggestedConsumables: [],
     };
   }
-}
-
-function defaultMaintenance(category?: string) {
-  if (category === "hvac") {
-    return [
-      {
-        title: "Limpiar filtros de aire",
-        frequencyDays: 90,
-        estimatedMinutes: 10,
-        isCritical: true,
-      },
-    ];
-  }
-  if (category === "appliance") {
-    return [
-      {
-        title: "Limpieza / descalcificación",
-        frequencyDays: 90,
-        estimatedMinutes: 20,
-        isCritical: true,
-      },
-    ];
-  }
-  return [
-    {
-      title: "Revisión general",
-      frequencyDays: 180,
-      estimatedMinutes: 15,
-      isCritical: false,
-    },
-  ];
 }
 
 function demoResult() {
@@ -291,23 +184,17 @@ function demoResult() {
     category: "hvac",
     confidence: 0.91,
     suggestedName: "Aire Acondicionado Daikin FTXC35C",
-    rawText: "DAIKIN MODEL: FTXC35C SERIAL NO: A123456789",
+    rawText: "DAIKIN MODEL: FTXC35C",
     suggestedMaintenance: [
       {
-        title: "Limpiar filtros de aire",
+        title: "Limpiar filtros",
         frequencyDays: 90,
         estimatedMinutes: 10,
         isCritical: true,
       },
     ],
-    suggestedConsumables: [
-      {
-        name: "Filtro de aire lavable",
-        estimatedLifespanDays: 90,
-        notes: "Limpiar cada 2-3 meses",
-      },
-    ],
+    suggestedConsumables: [],
     source: "demo",
-    note: "Modo demo: añade GEMINI_API_KEY en Vercel (aistudio.google.com/apikey) y haz Redeploy.",
+    note: "Modo demo: falta GEMINI_API_KEY en Vercel.",
   };
 }
