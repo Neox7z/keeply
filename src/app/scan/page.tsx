@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Camera, Upload, ArrowLeft, CheckCircle, Loader2 } from "lucide-react";
 
-type Step = "capture" | "processing" | "review" | "error";
+type Step = "capture" | "processing" | "review" | "error" | "manual";
 
 export default function ScanPage() {
   const router = useRouter();
@@ -13,6 +13,7 @@ export default function ScanPage() {
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [manual, setManual] = useState({ brand: "", model: "", name: "", serial: "" });
 
   const processImage = async (file: File) => {
     const reader = new FileReader();
@@ -23,47 +24,80 @@ export default function ScanPage() {
       setErrorMsg("");
 
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 55000);
         const res = await fetch("/api/identify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ image: dataUrl }),
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
 
         const data = await res.json();
         if (!res.ok) {
-          const msg = [data.error, data.detail, data.hint]
-            .filter(Boolean)
-            .join("\n\n");
-          throw new Error(msg || "Error al identificar");
+          const msg = [data.error, data.detail, data.hint].filter(Boolean).join("\n\n");
+          setErrorMsg(msg || "Error al identificar");
+          setStep("error");
+          return;
         }
         setResult(data);
         setStep("review");
       } catch (e: any) {
-        console.error(e);
-        setErrorMsg(e.message || "No se pudo identificar");
+        setErrorMsg(
+          e?.name === "AbortError"
+            ? "Tardó demasiado. Prueba otra foto o introduce los datos a mano."
+            : e.message || "No se pudo identificar"
+        );
         setStep("error");
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const save = () => {
+  const saveResult = (r: any) => {
     try {
       const items = JSON.parse(localStorage.getItem("keeply_items") || "[]");
       items.unshift({
         id: String(Date.now()),
-        name: result.suggestedName,
-        brand: result.brand,
-        model: result.model,
-        serialNumber: result.serialNumber,
-        category: result.category,
+        name: r.suggestedName,
+        brand: r.brand,
+        model: r.model,
+        serialNumber: r.serialNumber,
+        category: r.category,
+        deviceType: r.deviceType,
         photo: preview,
-        maintenance: result.suggestedMaintenance || [],
+        maintenance: r.suggestedMaintenance || [],
+        commonFailures: r.commonFailures || [],
         createdAt: new Date().toISOString(),
       });
       localStorage.setItem("keeply_items", JSON.stringify(items));
     } catch {}
     router.push("/dashboard");
+  };
+
+  const saveManual = () => {
+    const name =
+      manual.name ||
+      [manual.brand, manual.model].filter(Boolean).join(" ") ||
+      "Objeto sin nombre";
+    saveResult({
+      suggestedName: name,
+      brand: manual.brand || null,
+      model: manual.model || null,
+      serialNumber: manual.serial || null,
+      category: "other",
+      suggestedMaintenance: [
+        {
+          title: "Revisión general",
+          frequencyDays: 180,
+          estimatedMinutes: 20,
+          isCritical: false,
+          why: "Mantenimiento preventivo básico",
+        },
+      ],
+      commonFailures: [],
+    });
   };
 
   return (
@@ -83,16 +117,14 @@ export default function ScanPage() {
             <div className="text-center">
               <h1 className="text-xl font-bold mb-2">Foto de la etiqueta</h1>
               <p className="text-sm text-slate-500">
-                Apunta a la etiqueta trasera o inferior. Busca el número de modelo y serie.
+                Acerca bien la etiqueta (marca, modelo, serie). Buena luz.
               </p>
             </div>
-
-            <label className="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-2xl p-12 bg-white cursor-pointer active:border-blue-500">
+            <label className="flex flex-col items-center justify-center border-2 border-dashed border-blue-300 rounded-2xl p-12 bg-white cursor-pointer">
               <div className="w-16 h-16 rounded-full bg-blue-50 flex items-center justify-center mb-4">
                 <Camera className="w-8 h-8 text-blue-600" />
               </div>
               <span className="font-semibold text-lg">Tomar o subir foto</span>
-              <span className="text-sm text-slate-400 mt-1">Abre la cámara del iPhone</span>
               <input
                 type="file"
                 accept="image/*"
@@ -101,10 +133,8 @@ export default function ScanPage() {
                 onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])}
               />
             </label>
-
             <label className="flex items-center justify-center gap-2 text-blue-600 font-medium cursor-pointer">
-              <Upload className="w-4 h-4" />
-              Elegir de la galería
+              <Upload className="w-4 h-4" /> Elegir de la galería
               <input
                 type="file"
                 accept="image/*"
@@ -112,10 +142,6 @@ export default function ScanPage() {
                 onChange={(e) => e.target.files?.[0] && processImage(e.target.files[0])}
               />
             </label>
-
-            <div className="bg-blue-50 rounded-xl p-4 text-sm text-blue-800">
-              Tip: buena luz y etiqueta enfocada. Sin API key verás un resultado de demostración.
-            </div>
           </div>
         )}
 
@@ -126,21 +152,63 @@ export default function ScanPage() {
             )}
             <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto" />
             <p className="font-semibold">Identificando objeto...</p>
-            <p className="text-sm text-slate-500">Leyendo etiqueta con IA</p>
+            <p className="text-sm text-slate-500">Puede tardar hasta 30–40 s si Gemini está ocupado</p>
           </div>
         )}
 
         {step === "error" && (
-          <div className="text-center py-12 space-y-4">
-            <p className="text-red-600 font-medium text-sm whitespace-pre-wrap px-4">{errorMsg}</p>
+          <div className="py-8 space-y-4">
+            <p className="text-red-600 font-medium text-sm whitespace-pre-wrap px-2 text-center">
+              {errorMsg}
+            </p>
+            <div className="flex flex-col gap-3 px-2">
+              <button
+                onClick={() => {
+                  setStep("capture");
+                  setPreview(null);
+                }}
+                className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold"
+              >
+                Reintentar con otra foto
+              </button>
+              <button
+                onClick={() => setStep("manual")}
+                className="border border-slate-300 px-6 py-3 rounded-xl font-semibold"
+              >
+                Introducir datos a mano
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === "manual" && (
+          <div className="space-y-4">
+            {preview && (
+              <img src={preview} alt="preview" className="w-full h-36 object-cover rounded-xl" />
+            )}
+            <h2 className="font-bold text-lg">Datos del aparato</h2>
+            {(
+              [
+                ["name", "Nombre (ej. Nevera cocina)"],
+                ["brand", "Marca"],
+                ["model", "Modelo"],
+                ["serial", "Nº de serie (opcional)"],
+              ] as const
+            ).map(([key, label]) => (
+              <div key={key}>
+                <label className="text-xs text-slate-500">{label}</label>
+                <input
+                  className="w-full mt-1 border rounded-xl px-3 py-2.5 text-sm"
+                  value={manual[key]}
+                  onChange={(e) => setManual((m) => ({ ...m, [key]: e.target.value }))}
+                />
+              </div>
+            ))}
             <button
-              onClick={() => {
-                setStep("capture");
-                setPreview(null);
-              }}
-              className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold"
+              onClick={saveManual}
+              className="w-full bg-blue-600 text-white py-3 rounded-xl font-semibold"
             >
-              Reintentar
+              Guardar objeto
             </button>
           </div>
         )}
@@ -153,38 +221,53 @@ export default function ScanPage() {
             <div className="bg-white border rounded-2xl p-5 space-y-4">
               <div className="flex items-center gap-2 text-green-600 text-sm font-medium">
                 <CheckCircle className="w-5 h-5" />
-                {result.source === "demo"
-                  ? "Resultado de demostración"
-                  : `Identificado (${Math.round((result.confidence || 0) * 100)}%)`}
+                Identificado ({Math.round((result.confidence || 0) * 100)}%)
+                {result.modelUsed ? ` · ${result.modelUsed}` : ""}
               </div>
-              {result.note && (
-                <p className="text-xs text-amber-700 bg-amber-50 p-2 rounded-lg">{result.note}</p>
-              )}
               <div className="space-y-3">
                 <div>
                   <p className="text-xs text-slate-400">Nombre</p>
                   <p className="font-semibold">{result.suggestedName}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-slate-400">Marca</p>
-                  <p className="font-semibold">{result.brand || "—"}</p>
+                  <p className="text-xs text-slate-400">Marca / Modelo</p>
+                  <p className="font-semibold">
+                    {result.brand || "—"} {result.model || ""}
+                  </p>
                 </div>
-                <div>
-                  <p className="text-xs text-slate-400">Modelo</p>
-                  <p className="font-semibold">{result.model || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-slate-400">Nº de serie</p>
-                  <p className="font-semibold">{result.serialNumber || "—"}</p>
-                </div>
+                {result.deviceType && (
+                  <div>
+                    <p className="text-xs text-slate-400">Tipo</p>
+                    <p className="font-semibold">{result.deviceType}</p>
+                  </div>
+                )}
+                {result.serialNumber && (
+                  <div>
+                    <p className="text-xs text-slate-400">Serie</p>
+                    <p className="font-semibold">{result.serialNumber}</p>
+                  </div>
+                )}
               </div>
               {result.suggestedMaintenance?.length > 0 && (
                 <div className="pt-3 border-t">
-                  <p className="text-sm font-semibold mb-2">Mantenimientos sugeridos</p>
+                  <p className="text-sm font-semibold mb-2">Mantenimiento sugerido</p>
                   {result.suggestedMaintenance.map((m: any, i: number) => (
-                    <p key={i} className="text-sm text-slate-600">
-                      • {m.title} (cada {m.frequencyDays} días)
+                    <p key={i} className="text-sm text-slate-600 mb-1">
+                      • {m.title}
+                      {m.why ? ` — ${m.why}` : ""}
                     </p>
+                  ))}
+                </div>
+              )}
+              {result.commonFailures?.length > 0 && (
+                <div className="pt-3 border-t">
+                  <p className="text-sm font-semibold mb-2">Fallos frecuentes</p>
+                  {result.commonFailures.map((f: any, i: number) => (
+                    <div key={i} className="text-sm text-slate-600 mb-2">
+                      <p className="font-medium">{f.issue}</p>
+                      {f.symptoms && <p className="text-xs">Síntomas: {f.symptoms}</p>}
+                      {f.prevention && <p className="text-xs">Prevención: {f.prevention}</p>}
+                    </div>
                   ))}
                 </div>
               )}
@@ -201,7 +284,7 @@ export default function ScanPage() {
                 Reintentar
               </button>
               <button
-                onClick={save}
+                onClick={() => saveResult(result)}
                 className="flex-1 bg-blue-600 text-white rounded-xl py-3 font-semibold"
               >
                 Guardar objeto

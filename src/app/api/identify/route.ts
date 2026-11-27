@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
 
     if (!image || typeof image !== "string") {
       return NextResponse.json(
-        { error: "Se requiere la imagen en base64 (campo image)" },
+        { error: "Se requiere la imagen" },
         { status: 400 }
       );
     }
@@ -23,21 +23,21 @@ export async function POST(req: NextRequest) {
       const result = await identifyWithGemini(image, geminiKey);
       return NextResponse.json(result);
     } catch (apiErr: any) {
-      console.error("[identify] API error:", apiErr?.message || apiErr);
+      const detail = String(apiErr?.message || apiErr).slice(0, 600);
+      console.error("[identify]", detail);
       return NextResponse.json(
         {
-          error: "Error al procesar la imagen",
-          detail: String(apiErr?.message || apiErr).slice(0, 600),
-          hint:
-            "Gemini está saturado o la key no tiene cuota. Espera 1 minuto y reintenta, o genera otra key en aistudio.google.com/apikey.",
+          error: "No se pudo leer la etiqueta con IA ahora",
+          detail,
+          allowManual: true,
+          hint: "Gemini está saturado o lento. Puedes Reintentar en 1 min o introducir marca y modelo a mano.",
         },
         { status: 502 }
       );
     }
   } catch (error) {
-    console.error("[identify]", error);
     return NextResponse.json(
-      { error: "Error al procesar la imagen", detail: String(error) },
+      { error: "Error interno", detail: String(error), allowManual: true },
       { status: 500 }
     );
   }
@@ -49,94 +49,55 @@ function extractBase64(image: string): { mime: string; data: string } {
   return { mime: "image/jpeg", data: image.replace(/^data:.*?;base64,/, "") };
 }
 
-async function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function identifyWithGemini(image: string, apiKey: string) {
   const { mime, data } = extractBase64(image);
-
-  if (data.length > 3_500_000) {
-    throw new Error("Imagen demasiado grande. Acerca más la cámara a la etiqueta.");
+  if (data.length > 3_000_000) {
+    throw new Error("Foto muy pesada. Acerca más a la etiqueta y vuelve a intentar.");
   }
 
-  const prompt = `Eres un técnico de mantenimiento. Analiza la FOTO DE LA ETIQUETA del electrodoméstico.
-Extrae marca, modelo, serie y tipo de aparato.
-Además, según el tipo de aparato, indica qué fallos son más comunes y qué revisiones conviene hacer YA.
-Responde SOLO JSON válido sin markdown:
-{
-  "success": true,
-  "brand": "marca o null",
-  "model": "modelo o null",
-  "serialNumber": "serie o null",
-  "category": "hvac|appliance|electronics|tool|other",
-  "confidence": 0.0,
-  "suggestedName": "nombre corto",
-  "rawText": "texto leído de la etiqueta",
-  "deviceType": "ej: refrigerador, lavadora, aire acondicionado",
-  "suggestedMaintenance": [
-    {"title": "tarea", "frequencyDays": 90, "estimatedMinutes": 15, "isCritical": true, "why": "por qué importa"}
-  ],
-  "commonFailures": [
-    {"issue": "fallo típico", "symptoms": "síntomas", "prevention": "cómo evitarlo"}
-  ],
-  "suggestedConsumables": [
-    {"name": "repuesto", "estimatedLifespanDays": 90, "notes": "nota"}
-  ]
-}
-Si no lees un campo usa null. Sé concreto con el texto de la etiqueta.`;
+  const prompt = `Analiza esta etiqueta de electrodoméstico. Responde SOLO JSON válido sin markdown:
+{"success":true,"brand":"marca o null","model":"modelo o null","serialNumber":"serie o null","category":"hvac|appliance|electronics|tool|other","confidence":0.85,"suggestedName":"nombre corto","rawText":"texto de la etiqueta","deviceType":"tipo de aparato","suggestedMaintenance":[{"title":"tarea","frequencyDays":90,"estimatedMinutes":15,"isCritical":true,"why":"motivo"}],"commonFailures":[{"issue":"fallo típico","symptoms":"síntomas","prevention":"prevención"}],"suggestedConsumables":[{"name":"repuesto","estimatedLifespanDays":90,"notes":"nota"}]}
+Sé preciso con marca y modelo legibles en la foto.`;
 
-  // Modelos más estables primero; 3.8 al final (a menudo saturado)
-  const models = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-3.8-flash",
-  ];
-
+  // Solo modelos flash estables; varios reintentos ante 503
+  const models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"];
   let lastErr = "";
 
   for (const model of models) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 16000);
+      const timer = setTimeout(() => controller.abort(), 20000);
       try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": apiKey,
-            },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: prompt },
-                    { inline_data: { mime_type: mime, data } },
-                  ],
-                },
-              ],
-              generationConfig: { temperature: 0.1, maxOutputTokens: 1200 },
-            }),
-            signal: controller.signal,
-          }
-        );
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inline_data: { mime_type: mime, data } },
+                ],
+              },
+            ],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 1024 },
+          }),
+          signal: controller.signal,
+        });
         clearTimeout(timer);
-
         const textBody = await res.text();
 
         if (res.status === 503 || res.status === 429) {
-          lastErr = `${model}: HTTP ${res.status} (saturado/límite)`;
-          await sleep(800 * attempt);
+          lastErr = `${model} intento ${attempt}: HTTP ${res.status} saturado`;
+          await sleep(1500 * attempt);
           continue;
         }
-
         if (!res.ok) {
-          lastErr = `${model}: HTTP ${res.status} ${textBody.slice(0, 220)}`;
-          break; // siguiente modelo
+          lastErr = `${model}: HTTP ${res.status} ${textBody.slice(0, 200)}`;
+          break;
         }
 
         const json = JSON.parse(textBody);
@@ -144,12 +105,10 @@ Si no lees un campo usa null. Sé concreto con el texto de la etiqueta.`;
           json.candidates?.[0]?.content?.parts
             ?.map((p: any) => p.text || "")
             .join("") || "";
-
         if (!content) {
-          lastErr = `${model}: respuesta vacía`;
+          lastErr = `${model}: vacío`;
           break;
         }
-
         return {
           ...parseModelJson(content),
           source: "vision",
@@ -162,20 +121,16 @@ Si no lees un campo usa null. Sé concreto con el texto de la etiqueta.`;
           e?.name === "AbortError"
             ? `${model}: timeout`
             : `${model}: ${e.message}`;
-        await sleep(400);
+        await sleep(1000 * attempt);
       }
     }
   }
-
-  throw new Error(lastErr || "Gemini no respondió");
+  throw new Error(lastErr || "Gemini no disponible");
 }
 
 function parseModelJson(text: string) {
   try {
-    const cleaned = text
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
-      .trim();
+    const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const parsed = JSON.parse(cleaned);
     return {
       success: true,
@@ -207,9 +162,9 @@ function parseModelJson(text: string) {
       model: "Desconocido",
       serialNumber: null,
       category: "other",
-      confidence: 0.3,
-      suggestedName: "Objeto (revisar manualmente)",
-      rawText: text.slice(0, 500),
+      confidence: 0.25,
+      suggestedName: "Objeto (revisar)",
+      rawText: text.slice(0, 400),
       deviceType: null,
       suggestedMaintenance: [],
       commonFailures: [],
@@ -221,32 +176,18 @@ function parseModelJson(text: string) {
 function demoResult() {
   return {
     success: true,
-    brand: "Daikin",
-    model: "FTXC35C",
-    serialNumber: "A123456789",
-    category: "hvac",
-    confidence: 0.91,
-    suggestedName: "Aire Acondicionado Daikin FTXC35C",
-    rawText: "DAIKIN MODEL: FTXC35C",
-    deviceType: "aire acondicionado",
-    suggestedMaintenance: [
-      {
-        title: "Limpiar filtros",
-        frequencyDays: 90,
-        estimatedMinutes: 10,
-        isCritical: true,
-        why: "Filtros sucios bajan eficiencia y pueden dañar el compresor",
-      },
-    ],
-    commonFailures: [
-      {
-        issue: "No enfría bien",
-        symptoms: "Aire tibio, hielo en tuberías",
-        prevention: "Limpiar filtros y revisar gas",
-      },
-    ],
+    brand: "Demo",
+    model: "N/A",
+    serialNumber: null,
+    category: "other",
+    confidence: 0.5,
+    suggestedName: "Objeto de demostración",
+    rawText: "",
+    deviceType: null,
+    suggestedMaintenance: [],
+    commonFailures: [],
     suggestedConsumables: [],
     source: "demo",
-    note: "Modo demo: falta GEMINI_API_KEY en Vercel.",
+    note: "Falta GEMINI_API_KEY",
   };
 }
