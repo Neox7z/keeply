@@ -30,7 +30,12 @@ export default function ScanPage() {
         });
 
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Error al identificar");
+        if (!res.ok) {
+          const msg = [data.error, data.detail, data.hint]
+            .filter(Boolean)
+            .join("\n\n");
+          throw new Error(msg || "Error al identificar");
+        }
         setResult(data);
         setStep("review");
       } catch (e: any) {
@@ -127,9 +132,12 @@ export default function ScanPage() {
 
         {step === "error" && (
           <div className="text-center py-12 space-y-4">
-            <p className="text-red-600 font-medium">{errorMsg}</p>
+            <p className="text-red-600 font-medium text-sm whitespace-pre-wrap px-4">{errorMsg}</p>
             <button
-              onClick={() => { setStep("capture"); setPreview(null); }}
+              onClick={() => {
+                setStep("capture");
+                setPreview(null);
+              }}
               className="bg-blue-600 text-white px-6 py-3 rounded-xl font-semibold"
             >
               Reintentar
@@ -183,7 +191,11 @@ export default function ScanPage() {
             </div>
             <div className="flex gap-3">
               <button
-                onClick={() => { setStep("capture"); setPreview(null); setResult(null); }}
+                onClick={() => {
+                  setStep("capture");
+                  setPreview(null);
+                  setResult(null);
+                }}
                 className="flex-1 border rounded-xl py-3 font-semibold"
               >
                 Reintentar
